@@ -136,23 +136,32 @@ def main():
         page.wait_for_timeout(4000)
         page.keyboard.press("Escape") 
         
-        # --- MEJORA: Buscar y pulsar todos los botones "See more" / "Ver más" ---
+        # --- SOLUCIÓN AL ERROR DEL SELECTOR ---
         print("Buscando textos truncados para expandir...")
         try:
-            # Selector de Playwright que busca elementos interactivos con esos textos concretos
-            see_more_buttons = page.locator("div[role='button']:has-text('See more'), div[role='button']:has-text('Ver más'), text='See more...', text='Ver más...'")
-            count = see_more_buttons.count()
-            print(f"Botones de expansión detectados: {count}")
+            # Lista de selectores limpios y nativos que Playwright procesa sin errores
+            selectores_ver_mas = [
+                "text='See more'", 
+                "text='Ver más'", 
+                "text='See more...'", 
+                "text='Ver más...'"
+            ]
             
-            for i in range(count):
-                try:
-                    see_more_buttons.nth(i).click(timeout=2000)
-                except:
-                    pass # Si alguno no es clicleable o desaparece, saltamos al siguiente
-            page.wait_for_timeout(2000)
+            for selector in selectores_ver_mas:
+                botones = page.locator(selector)
+                count = botones.count()
+                if count > 0:
+                    print(f"Detectados {count} botones con el texto: {selector}")
+                    for i in range(count):
+                        try:
+                            # Hacemos clic uno a uno forzando a que no espere si no es visible
+                            botones.nth(i).click(timeout=1500)
+                        except:
+                            pass
         except Exception as e:
             print(f"Aviso al expandir texto: {e}")
 
+        # Scroll para asegurar carga de imágenes pesadas tras la expansión
         page.evaluate("window.scrollTo(0, 1000)")
         page.wait_for_timeout(3000)
         
