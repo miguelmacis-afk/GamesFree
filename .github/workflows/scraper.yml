@@ -1,0 +1,44 @@
+name: Facebook Game Scraper
+
+on:
+  schedule:
+    # Se ejecuta cada hora (puedes cambiarlo según prefieras)
+    - cron: '0 * * * *'
+  workflow_dispatch: # Permite ejecutar el script manualmente desde GitHub
+
+jobs:
+  scrape-and-notify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Requerido para poder actualizar el history.json en tu repo
+
+    steps:
+    - name: Clonar repositorio
+      uses: actions/checkout@v4
+
+    - name: Configurar Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Instalar dependencias del sistema y Python
+      run: |
+        pip install playwright beautifulsoup4 requests
+        playwright install chromium --with-deps
+
+    - name: Ejecutar Scraper
+      env:
+        DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+      run: python scraper.py
+
+    - name: Guardar historial en el repositorio
+      run: |
+        git config --global user.name "GitHub Actions Bot"
+        git config --global user.email "actions@github.com"
+        git add history.json
+        if ! git diff --cached --quiet; then
+          git commit -m "🤖 Actualizar historial de publicaciones [Skip CI]"
+          git push
+        else
+          echo "Sin cambios en el historial."
+        fi
