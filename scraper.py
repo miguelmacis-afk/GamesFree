@@ -23,12 +23,13 @@ def save_history(history):
         json.dump(history, f, ensure_ascii=False, indent=4)
 
 def parse_post_data(post_element):
+    # Intentar capturar por atributo nativo, si no, buscar divs con texto
     text_elem = post_element.find(attrs={"data-ad-comet-preview": "post_message"})
     
     if not text_elem:
         for div in post_element.find_all('div', dir='auto'):
             div_text = div.get_text().lower()
-            if "gratis" in div_text or "steam" in div_text:
+            if "gratis" in div_text or "steam" in div_text or "epic" in div_text:
                 text_elem = div
                 break
 
@@ -58,12 +59,13 @@ def parse_post_data(post_element):
                 url = u.rstrip('.').rstrip('/')
                 break
 
-    # 2. Extraer Imagen del juego
+    # 2. Extraer Imagen del juego (Controlando Lazy Loading)
     image_url = None
     img_tags = post_element.find_all('img')
     for img in img_tags:
-        src = img.get('src', '')
-        if "http" in src and "emoji.php" not in src and "rsrc.php" not in src:
+        # Priorizar atributos de carga perezosa que usa Meta
+        src = img.get('data-src') or img.get('src') or ''
+        if "http" in src and not any(x in src for x in ["emoji.php", "rsrc.php", "static.xx"]):
             image_url = src
             break
 
@@ -80,7 +82,7 @@ def parse_post_data(post_element):
     if game_match: 
         game = game_match.group(1).strip()
 
-    # 5. Tiempo (Regex capaz de tolerar saltos de línea tras expandir el "See more")
+    # 5. Tiempo
     tiempo = "Hasta agotar existencias / No especificado"
     tiempo_match = re.search(r'(tienen hasta el \d+ de \s*\w+|hasta el \d+ de \s*\w+)', full_text, re.IGNORECASE)
     if tiempo_match: 
@@ -133,56 +135,50 @@ def main():
         
         print("Abriendo Facebook...")
         page.goto("https://m.facebook.com/FreeSteamGamesJuegosSteamGratis", wait_until="networkidle")
+        page.wait_for_timeout(3000)
         
-        page.wait_for_timeout(4000)
+        # Gestionar posibles diálogos iniciales de cookies / login
         page.keyboard.press("Escape") 
         
-        # --- SOLUCIÓN AL ERROR DEL SELECTOR ---
+        # --- SOLUCIÓN AL CLIC DE "VER MÁS" ---
         print("Buscando textos truncados para expandir...")
-        try:
-            # Lista de selectores limpios y nativos que Playwright procesa sin errores
-            selectores_ver_mas = [
-                "text='See more'", 
-                "text='Ver más'", 
-                "text='See more...'", 
-                "text='Ver más...'"
-            ]
-            
-            for selector in selectores_ver_mas:
-                botones = page.locator(selector)
-                count = botones.count()
-                if count > 0:
-                    print(f"Detectados {count} botones con el texto: {selector}")
-                    for i in range(count):
-                        try:
-                            # Hacemos clic uno a uno forzando a que no espere si no es visible
-                            botones.nth(i).click(timeout=1500)
-                        except:
-                            pass
-        except Exception as e:
-            print(f"Aviso al expandir texto: {e}")
+        # Buscamos de manera dinámica: mientras sigan existiendo botones visibles, hacemos clic al primero disponible
+        for selector in ["text='See more'", "text='Ver más'", "text='See more...'", "text='Ver más...'"]:
+            while True:
+                boton = page.locator(selector).first
+                if boton.is_visible():
+                    try:
+                        boton.click(timeout=2000)
+                        page.wait_for_timeout(500) # Pequeña pausa para permitir la expansión del DOM
+                    except:
+                        break
+                else:
+                    break
 
-        # Scroll para asegurar carga de imágenes pesadas tras la expansión
-        print("Forzando scroll real mediante mouse wheel...")
-        for _ in range(8):  # Aumentamos a 8 iteraciones
-            # Simula girar la rueda del ratón hacia abajo 900 píxeles
-            page.mouse.wheel(0, 900)
-            page.wait_for_timeout(2000)  # Damos 2 segundos completos para la petición de red
-            
-            # Forzamos el cierre del banner de login que congela la pantalla
+        # Scroll dinámico para activar peticiones de red e imágenes diferidas
+        print("Forzando scroll para cargar imágenes diferidas...")
+        for _ in range(6):
+            page.mouse.wheel(0, 800)
+            page.wait_for_timeout(1500)
             try:
                 page.keyboard.press("Escape")
             except:
                 pass
         
-        # Una pequeña espera final para asegurar que BeautifulSoup lea todo el DOM actualizado
-        page.wait_for_timeout(2000)  # Espera 2 segundos a que cargue el contenido nuevo
-        
+        page.wait_for_timeout(2000)
         html = page.content()
         soup = BeautifulSoup(html, "html.parser")
         browser.close()
 
+    # Mapeo flexible de posts: Busca roles de artículo, pero si falla, se apoya en contenedores comunes de publicaciones
     posts = soup.find_all('div', attrs={'role': 'article'})
+    if len(posts) == 0:
+        # Fallback alternativo para ciertas estructuras móviles de Facebook
+        posts = soup.find_all('div', attrs={'data-tracking-duration-id': True})
+        if len(posts) == 0:
+            # Último recurso: bloques contenedores genéricos de historias
+            posts = soup.find_all('article')
+
     print(f"📦 Total de posts estructurales encontrados: {len(posts)}")
 
     detected_new = False
@@ -191,15 +187,14 @@ def main():
     for p in posts:
         data = parse_post_data(p)
         
+        # Validar consistencia mínima del post
         if len(data['raw_text']) < 15 or data['url'] == "No encontrada":
             continue
             
         processed_count += 1
         print(f"\n--- Analizando Post #{processed_count} ---")
-        print(f"Texto completo extraído: {data['raw_text'][:150]}...")
-        print(f"Juego Extracted: {data['juego']}")
-        print(f"Tiempo Extracted: {data['tiempo']}")
-        print(f"URL Extracted: {data['url']}")
+        print(f"Juego: {data['juego']}")
+        print(f"URL: {data['url']}")
 
         post_id = data['id']
         if post_id in history:
@@ -215,7 +210,9 @@ def main():
         else:
             print(f"❌ Error Discord: {status}")
 
+        # Límite de control para no saturar el webhook en una sola ejecución
         if len(new_history) - len(history) >= 4:
+            print("⚠️ Se alcanzó el límite de 4 envíos simultáneos.")
             break
 
     if detected_new:
