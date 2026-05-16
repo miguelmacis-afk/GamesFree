@@ -132,7 +132,7 @@ def main():
         page = context.new_page()
         
         print("Abriendo Facebook...")
-        page.goto("https://www.facebook.com/FreeSteamGamesJuegosSteamGratis", wait_until="networkidle")
+        page.goto("https://m.facebook.com/FreeSteamGamesJuegosSteamGratis", wait_until="networkidle")
         
         page.wait_for_timeout(4000)
         page.keyboard.press("Escape") 
