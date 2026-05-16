@@ -22,11 +22,8 @@ def save_history(history):
         json.dump(history, f, ensure_ascii=False, indent=4)
 
 def parse_post_data(post_element):
-    # --- MEJORA CRÍTICA: Aislar solo el texto escrito del post ---
-    # Facebook mete el texto del usuario en este atributo específico
     text_elem = post_element.find(attrs={"data-ad-comet-preview": "post_message"})
     
-    # Fallback si cambia el atributo de Facebook: buscar el bloque que contenga "gratis"
     if not text_elem:
         for div in post_element.find_all('div', dir='auto'):
             div_text = div.get_text().lower()
@@ -34,7 +31,6 @@ def parse_post_data(post_element):
                 text_elem = div
                 break
 
-    # Si encontramos el bloque limpio lo usamos, si no, usamos el elemento base
     full_text = text_elem.get_text(separator="\n").strip() if text_elem else post_element.get_text(separator="\n").strip()
     
     # 1. Extraer URL (Decodificando el redireccionador de Facebook)
@@ -61,7 +57,7 @@ def parse_post_data(post_element):
                 url = u.rstrip('.').rstrip('/')
                 break
 
-    # 2. Extraer Imagen del juego (ignornado avatares/iconos pequeños)
+    # 2. Extraer Imagen del juego
     image_url = None
     img_tags = post_element.find_all('img')
     for img in img_tags:
@@ -77,26 +73,25 @@ def parse_post_data(post_element):
     elif "epic" in url.lower() or "epic" in lower_text: platform = "EPIC GAMES"
     elif "gog" in url.lower() or "gog" in lower_text: platform = "GOG"
 
-    # 4. Nombre del Juego (Ahora que el texto está limpio de cabeceras de Facebook)
+    # 4. Nombre del Juego
     game = full_text.split('\n')[0] if full_text else "No detectado"
     game_match = re.search(r'^(.*?)\s+gratis en', full_text, re.IGNORECASE)
     if game_match: 
         game = game_match.group(1).strip()
 
-    # 5. Tiempo (Regex mejorado para capturar la fecha exacta)
+    # 5. Tiempo (Regex capaz de tolerar saltos de línea tras expandir el "See more")
     tiempo = "Hasta agotar existencias / No especificado"
-    tiempo_match = re.search(r'(hasta el \d+ de \s*\w+)', full_text, re.IGNORECASE)
+    tiempo_match = re.search(r'(tienen hasta el \d+ de \s*\w+|hasta el \d+ de \s*\w+)', full_text, re.IGNORECASE)
     if tiempo_match: 
         tiempo = tiempo_match.group(1).strip().capitalize()
 
-    # ID único basado únicamente en el texto del mensaje limpio
     clean_text_id = re.sub(r'\s+', '', full_text[:80])
     post_id = str(hash(clean_text_id))
 
     return {
         "juego": game, "url": url, "plataforma": platform,
         "tiempo": tiempo, "imagen": image_url, "id": post_id,
-        "raw_text": full_text[:100].replace('\n', ' ')
+        "raw_text": full_text.replace('\n', ' ')
     }
 
 def send_to_discord(post, webhook_url):
@@ -139,8 +134,25 @@ def main():
         page.goto("https://www.facebook.com/FreeSteamGamesJuegosSteamGratis", wait_until="networkidle")
         
         page.wait_for_timeout(4000)
-        page.keyboard.press("Escape") # Cerrar popup molesto de login si aparece
+        page.keyboard.press("Escape") 
         
+        # --- MEJORA: Buscar y pulsar todos los botones "See more" / "Ver más" ---
+        print("Buscando textos truncados para expandir...")
+        try:
+            # Selector de Playwright que busca elementos interactivos con esos textos concretos
+            see_more_buttons = page.locator("div[role='button']:has-text('See more'), div[role='button']:has-text('Ver más'), text='See more...', text='Ver más...'")
+            count = see_more_buttons.count()
+            print(f"Botones de expansión detectados: {count}")
+            
+            for i in range(count):
+                try:
+                    see_more_buttons.nth(i).click(timeout=2000)
+                except:
+                    pass # Si alguno no es clicleable o desaparece, saltamos al siguiente
+            page.wait_for_timeout(2000)
+        except Exception as e:
+            print(f"Aviso al expandir texto: {e}")
+
         page.evaluate("window.scrollTo(0, 1000)")
         page.wait_for_timeout(3000)
         
@@ -157,13 +169,12 @@ def main():
     for p in posts:
         data = parse_post_data(p)
         
-        # Omitir si es un bloque irrelevante o sin links de juegos externos
         if len(data['raw_text']) < 15 or data['url'] == "No encontrada":
             continue
             
         processed_count += 1
         print(f"\n--- Analizando Post #{processed_count} ---")
-        print(f"Texto limpio: {data['raw_text']}...")
+        print(f"Texto completo extraído: {data['raw_text'][:150]}...")
         print(f"Juego Extracted: {data['juego']}")
         print(f"Tiempo Extracted: {data['tiempo']}")
         print(f"URL Extracted: {data['url']}")
