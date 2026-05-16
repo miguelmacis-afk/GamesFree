@@ -159,7 +159,7 @@ def main():
                             botones.nth(i).click(timeout=1500)
                         except:
                             pass
-        excepte Exception as e:
+        except Exception as e:
             print(f"Aviso al expandir texto: {e}")
 
         # Scroll para asegurar carga de imágenes pesadas tras la expansión
