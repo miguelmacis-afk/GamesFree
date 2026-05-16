@@ -163,13 +163,13 @@ def main():
             print(f"Aviso al expandir texto: {e}")
 
         # Scroll para asegurar carga de imágenes pesadas tras la expansión
-        print("Haciendo scroll suave para forzar la carga de posts viejos...")
-        for _ in range(5):  # Damos 5 "empujones" de scroll
-            # Bajamos 800 píxeles simulando la pantalla
-            page.evaluate("window.scrollBy(0, 800)")
-            page.wait_for_timeout(1500)  # Espera un segundo y medio a que cargue
+        print("Forzando scroll real mediante mouse wheel...")
+        for _ in range(8):  # Aumentamos a 8 iteraciones
+            # Simula girar la rueda del ratón hacia abajo 900 píxeles
+            page.mouse.wheel(0, 900)
+            page.wait_for_timeout(2000)  # Damos 2 segundos completos para la petición de red
             
-            # Intentamos cerrar cualquier ventana emergente de Login que bloquee la pantalla
+            # Forzamos el cierre del banner de login que congela la pantalla
             try:
                 page.keyboard.press("Escape")
             except:
