@@ -175,10 +175,6 @@ def main():
         html = page.content()
         soup = BeautifulSoup(html, "html.parser")
         browser.close()
-        
-        html = page.content()
-        soup = BeautifulSoup(html, "html.parser")
-        browser.close()
 
     posts = soup.find_all('div', attrs={'role': 'article'})
     print(f"📦 Total de posts estructurales encontrados: {len(posts)}")
