@@ -22,14 +22,26 @@ def save_history(history):
         json.dump(history, f, ensure_ascii=False, indent=4)
 
 def parse_post_data(post_element):
-    full_text = post_element.get_text(separator="\n").strip()
+    # --- MEJORA CRÍTICA: Aislar solo el texto escrito del post ---
+    # Facebook mete el texto del usuario en este atributo específico
+    text_elem = post_element.find(attrs={"data-ad-comet-preview": "post_message"})
     
-    # 1. Extraer URL buscando enlaces reales y decodificando el redireccionamiento de Facebook
+    # Fallback si cambia el atributo de Facebook: buscar el bloque que contenga "gratis"
+    if not text_elem:
+        for div in post_element.find_all('div', dir='auto'):
+            div_text = div.get_text().lower()
+            if "gratis" in div_text or "steam" in div_text:
+                text_elem = div
+                break
+
+    # Si encontramos el bloque limpio lo usamos, si no, usamos el elemento base
+    full_text = text_elem.get_text(separator="\n").strip() if text_elem else post_element.get_text(separator="\n").strip()
+    
+    # 1. Extraer URL (Decodificando el redireccionador de Facebook)
     url = "No encontrada"
     a_tags = post_element.find_all('a', href=True)
     for a in a_tags:
         href = a['href']
-        # Si Facebook camufla el link externo detrás de su redirección l.facebook.com
         if "l.facebook.com/l.php" in href:
             parsed_href = urllib.parse.urlparse(href)
             query_params = urllib.parse.parse_qs(parsed_href.query)
@@ -42,7 +54,6 @@ def parse_post_data(post_element):
             url = href
             break
 
-    # Si no se encontró en las etiquetas <a>, intentar por texto plano (como último recurso)
     if url == "No encontrada":
         urls = re.findall(r'(https?://[^\s]+)', full_text)
         for u in urls:
@@ -50,12 +61,11 @@ def parse_post_data(post_element):
                 url = u.rstrip('.').rstrip('/')
                 break
 
-    # 2. Extraer Imagen (evitando iconos pequeños de emojis o avatares)
+    # 2. Extraer Imagen del juego (ignornado avatares/iconos pequeños)
     image_url = None
     img_tags = post_element.find_all('img')
     for img in img_tags:
         src = img.get('src', '')
-        # Las imágenes de posts suelen ser grandes y no contienen rutas de emojis/fbsbx
         if "http" in src and "emoji.php" not in src and "rsrc.php" not in src:
             image_url = src
             break
@@ -67,32 +77,32 @@ def parse_post_data(post_element):
     elif "epic" in url.lower() or "epic" in lower_text: platform = "EPIC GAMES"
     elif "gog" in url.lower() or "gog" in lower_text: platform = "GOG"
 
-    # 4. Nombre del Juego
+    # 4. Nombre del Juego (Ahora que el texto está limpio de cabeceras de Facebook)
     game = full_text.split('\n')[0] if full_text else "No detectado"
     game_match = re.search(r'^(.*?)\s+gratis en', full_text, re.IGNORECASE)
     if game_match: 
         game = game_match.group(1).strip()
 
-    # 5. Tiempo
+    # 5. Tiempo (Regex mejorado para capturar la fecha exacta)
     tiempo = "Hasta agotar existencias / No especificado"
-    tiempo_match = re.search(r'(tienen hasta el \d+ de \w+|hasta el \d+ de \w+)', full_text, re.IGNORECASE)
+    tiempo_match = re.search(r'(hasta el \d+ de \s*\w+)', full_text, re.IGNORECASE)
     if tiempo_match: 
-        tiempo = tiempo_match.group(1).capitalize()
+        tiempo = tiempo_match.group(1).strip().capitalize()
 
-    # Generamos un ID único limpio basado en los primeros caracteres del texto
+    # ID único basado únicamente en el texto del mensaje limpio
     clean_text_id = re.sub(r'\s+', '', full_text[:80])
     post_id = str(hash(clean_text_id))
 
     return {
         "juego": game, "url": url, "plataforma": platform,
         "tiempo": tiempo, "imagen": image_url, "id": post_id,
-        "raw_text": full_text[:120]  # Guardamos un fragmento para los logs
+        "raw_text": full_text[:100].replace('\n', ' ')
     }
 
 def send_to_discord(post, webhook_url):
     embed = {
         "title": f"🎮 ¡Nuevo juego gratis detectado!",
-        "color": 3066993, # Verde llamativo
+        "color": 3066993, 
         "fields": [
             {"name": "Juego", "value": f"**{post['juego']}**", "inline": False},
             {"name": "Plataforma", "value": f"🔹 {post['plataforma']}", "inline": True},
@@ -128,11 +138,9 @@ def main():
         print("Abriendo Facebook...")
         page.goto("https://www.facebook.com/FreeSteamGamesJuegosSteamGratis", wait_until="networkidle")
         
-        # Esperar y cerrar cualquier modal molesto simulando la tecla Escape
         page.wait_for_timeout(4000)
-        page.keyboard.press("Escape")
+        page.keyboard.press("Escape") # Cerrar popup molesto de login si aparece
         
-        # Scroll leve para cargar elementos perezosos (lazy-loading de imágenes)
         page.evaluate("window.scrollTo(0, 1000)")
         page.wait_for_timeout(3000)
         
@@ -146,48 +154,42 @@ def main():
     detected_new = False
     processed_count = 0
 
-    for idx, p in enumerate(posts, start=1):
+    for p in posts:
         data = parse_post_data(p)
         
-        # Omitir si es un bloque vacío o no tiene texto legible de juego
-        if len(data['raw_text']) < 15:
+        # Omitir si es un bloque irrelevante o sin links de juegos externos
+        if len(data['raw_text']) < 15 or data['url'] == "No encontrada":
             continue
             
         processed_count += 1
         print(f"\n--- Analizando Post #{processed_count} ---")
-        print(f"Texto corto: {data['raw_text']}...")
-        print(f"URL encontrada: {data['url']}")
-        print(f"Imagen encontrada: {'Sí' if data['imagen'] else 'No'}")
-
-        # Filtro de seguridad: Si no pudimos rescatar un enlace válido, no lo mandamos
-        if data['url'] == "No encontrada":
-            print("⚠️ Post omitido: No se localizó un enlace externo válido.")
-            continue
+        print(f"Texto limpio: {data['raw_text']}...")
+        print(f"Juego Extracted: {data['juego']}")
+        print(f"Tiempo Extracted: {data['tiempo']}")
+        print(f"URL Extracted: {data['url']}")
 
         post_id = data['id']
         if post_id in history:
-            print("🛑 Este juego ya fue procesado anteriormente (está en el historial).")
+            print("🛑 Este juego ya está registrado en el historial.")
             continue
 
-        print(f"🚀 ¡Novedad detectada!: Enviando '{data['juego']}' a Discord...")
+        print(f"🚀 ¡Enviando '{data['juego']}' a Discord!")
         status = send_to_discord(data, webhook_url)
         
         if status in [200, 204]:
             new_history.append(post_id)
             detected_new = True
         else:
-            print(f"❌ Error al enviar a Discord (Código: {status})")
+            print(f"❌ Error Discord: {status}")
 
-        # Evitar saturar enviando demasiados posts juntos en la primerísima ejecución
         if len(new_history) - len(history) >= 4:
-            print("Limiting initial batch to 4 posts.")
             break
 
     if detected_new:
         save_history(new_history)
-        print("\n✅ Historial guardado y actualizado en history.json.")
+        print("\n✅ Historial actualizado en history.json.")
     else:
-        print("\nFormato analizado. No se encontraron publicaciones nuevas elegibles.")
+        print("\nNo se encontraron nuevas ofertas elegibles.")
 
 if __name__ == "__main__":
     main()
