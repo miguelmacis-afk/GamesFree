@@ -15,7 +15,8 @@ def load_history():
             try:
                 data = json.load(f)
                 return data if isinstance(data, list) else []
-            except: return []
+            except:
+                return []
     return []
 
 def save_history(history):
@@ -23,7 +24,7 @@ def save_history(history):
         json.dump(history, f, ensure_ascii=False, indent=4)
 
 def parse_post_data(post_element):
-    # Intentar capturar por atributo nativo, si no, buscar divs con texto
+    # Intentar capturar por atributo nativo, si no, buscar divs con texto relevante
     text_elem = post_element.find(attrs={"data-ad-comet-preview": "post_message"})
     
     if not text_elem:
@@ -59,11 +60,11 @@ def parse_post_data(post_element):
                 url = u.rstrip('.').rstrip('/')
                 break
 
-    # 2. Extraer Imagen del juego (Controlando Lazy Loading)
+    # 2. Extraer Imagen del juego (Controlando Lazy Loading de Meta)
     image_url = None
     img_tags = post_element.find_all('img')
     for img in img_tags:
-        # Priorizar atributos de carga perezosa que usa Meta
+        # Priorizar atributos de carga diferida que usa Facebook
         src = img.get('data-src') or img.get('src') or ''
         if "http" in src and not any(x in src for x in ["emoji.php", "rsrc.php", "static.xx"]):
             image_url = src
@@ -72,9 +73,12 @@ def parse_post_data(post_element):
     # 3. Plataforma
     platform = "OTRA"
     lower_text = full_text.lower()
-    if "steam" in url.lower() or "steam" in lower_text: platform = "STEAM"
-    elif "epic" in url.lower() or "epic" in lower_text: platform = "EPIC GAMES"
-    elif "gog" in url.lower() or "gog" in lower_text: platform = "GOG"
+    if "steam" in url.lower() or "steam" in lower_text: 
+        platform = "STEAM"
+    elif "epic" in url.lower() or "epic" in lower_text: 
+        platform = "EPIC GAMES"
+    elif "gog" in url.lower() or "gog" in lower_text: 
+        platform = "GOG"
 
     # 4. Nombre del Juego
     game = full_text.split('\n')[0] if full_text else "No detectado"
@@ -82,12 +86,13 @@ def parse_post_data(post_element):
     if game_match: 
         game = game_match.group(1).strip()
 
-    # 5. Tiempo
+    # 5. Tiempo / Vigencia de la oferta
     tiempo = "Hasta agotar existencias / No especificado"
     tiempo_match = re.search(r'(tienen hasta el \d+ de \s*\w+|hasta el \d+ de \s*\w+)', full_text, re.IGNORECASE)
     if tiempo_match: 
         tiempo = tiempo_match.group(1).strip().capitalize()
 
+    # Generar un hash ID único basado en el contenido del texto para evitar duplicados
     clean_text_id = re.sub(r'\s+', '', full_text[:80])
     post_id = hashlib.md5(clean_text_id.encode('utf-8')).hexdigest()
 
@@ -99,7 +104,7 @@ def parse_post_data(post_element):
 
 def send_to_discord(post, webhook_url):
     embed = {
-        "title": f"🎮 ¡Nuevo juego gratis detectado!",
+        "title": "🎮 ¡Nuevo juego gratis detectado!",
         "color": 3066993, 
         "fields": [
             {"name": "Juego", "value": f"**{post['juego']}**", "inline": False},
@@ -137,25 +142,50 @@ def main():
         page.goto("https://m.facebook.com/FreeSteamGamesJuegosSteamGratis", wait_until="networkidle")
         page.wait_for_timeout(3000)
         
-        # Gestionar posibles diálogos iniciales de cookies / login
-        page.keyboard.press("Escape") 
+        # --- GESTIÓN ANTIBLOQUEO: VENTANA DE COOKIES DE META ---
+        print("Comprobando si aparece el aviso de cookies de Facebook...")
+        botones_cookies = [
+            "text='Permitir todas las cookies'",
+            "text='Aceptar todas'",
+            "text='Allow all cookies'",
+            "text='De acuerdo'",
+            "button:has-text('Permitir')",
+            "button:has-text('Aceptar')"
+        ]
+        
+        for selector_cookie in botones_cookies:
+            boton = page.locator(selector_cookie).first
+            if boton.is_visible():
+                try:
+                    print(f"🍪 Ventana de cookies detectada. Haciendo clic en: {selector_cookie}")
+                    boton.click(timeout=3000)
+                    page.wait_for_timeout(2000)  # Pausa para que el modal se cierre visualmente
+                    break
+                except:
+                    pass
+
+        # Mitigar posibles diálogos flotantes adicionales o banners menores
+        try:
+            page.keyboard.press("Escape")
+        except:
+            pass
         
         # --- SOLUCIÓN AL CLIC DE "VER MÁS" ---
         print("Buscando textos truncados para expandir...")
-        # Buscamos de manera dinámica: mientras sigan existiendo botones visibles, hacemos clic al primero disponible
+        # Iteración dinámica para resolver el desajuste de índices en cascada
         for selector in ["text='See more'", "text='Ver más'", "text='See more...'", "text='Ver más...'"]:
             while True:
                 boton = page.locator(selector).first
                 if boton.is_visible():
                     try:
                         boton.click(timeout=2000)
-                        page.wait_for_timeout(500) # Pequeña pausa para permitir la expansión del DOM
+                        page.wait_for_timeout(500)  # Breve lapso para la mutación del árbol DOM
                     except:
                         break
                 else:
                     break
 
-        # Scroll dinámico para activar peticiones de red e imágenes diferidas
+        # Scroll progresivo controlado para renderizar el feed completo
         print("Forzando scroll para cargar imágenes diferidas...")
         for _ in range(6):
             page.mouse.wheel(0, 800)
@@ -170,13 +200,11 @@ def main():
         soup = BeautifulSoup(html, "html.parser")
         browser.close()
 
-    # Mapeo flexible de posts: Busca roles de artículo, pero si falla, se apoya en contenedores comunes de publicaciones
+    # Extracción por árbol semántico robusto ante alteraciones estéticas de Meta
     posts = soup.find_all('div', attrs={'role': 'article'})
     if len(posts) == 0:
-        # Fallback alternativo para ciertas estructuras móviles de Facebook
         posts = soup.find_all('div', attrs={'data-tracking-duration-id': True})
         if len(posts) == 0:
-            # Último recurso: bloques contenedores genéricos de historias
             posts = soup.find_all('article')
 
     print(f"📦 Total de posts estructurales encontrados: {len(posts)}")
@@ -187,7 +215,7 @@ def main():
     for p in posts:
         data = parse_post_data(p)
         
-        # Validar consistencia mínima del post
+        # Validar consistencia e integridad mínima de datos extraídos
         if len(data['raw_text']) < 15 or data['url'] == "No encontrada":
             continue
             
@@ -210,16 +238,16 @@ def main():
         else:
             print(f"❌ Error Discord: {status}")
 
-        # Límite de control para no saturar el webhook en una sola ejecución
+        # Control del ratio de transferencias por ejecución
         if len(new_history) - len(history) >= 4:
-            print("⚠️ Se alcanzó el límite de 4 envíos simultáneos.")
+            print("⚠️ Se alcanzó el límite preventivo de 4 envíos simultáneos.")
             break
 
     if detected_new:
         save_history(new_history)
-        print("\n✅ Historial actualizado en history.json.")
+        print("\n✅ Historial actualizado con éxito en history.json.")
     else:
-        print("\nNo se encontraron nuevas ofertas elegibles.")
+        print("\nNo se encontraron nuevas ofertas elegibles en esta ejecución.")
 
 if __name__ == "__main__":
     main()
