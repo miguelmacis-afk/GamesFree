@@ -159,18 +159,24 @@ def main():
                             botones.nth(i).click(timeout=1500)
                         except:
                             pass
-        except Exception as e:
+        excepte Exception as e:
             print(f"Aviso al expandir texto: {e}")
 
         # Scroll para asegurar carga de imágenes pesadas tras la expansión
-        print("Haciendo scroll para cargar más posts reales...")
-        for i in range(3):  # Hará scroll 3 veces hacia abajo
-            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            page.wait_for_timeout(2000)  # Espera 2 segundos a que cargue el contenido nuevo
+        print("Haciendo scroll suave para forzar la carga de posts viejos...")
+        for _ in range(5):  # Damos 5 "empujones" de scroll
+            # Bajamos 800 píxeles simulando la pantalla
+            page.evaluate("window.scrollBy(0, 800)")
+            page.wait_for_timeout(1500)  # Espera un segundo y medio a que cargue
             
-        # Intentar volver a presionar Escape por si sale el banner de login molesto
-        page.keyboard.press("Escape") 
-        # --------------------------------------------------
+            # Intentamos cerrar cualquier ventana emergente de Login que bloquee la pantalla
+            try:
+                page.keyboard.press("Escape")
+            except:
+                pass
+        
+        # Una pequeña espera final para asegurar que BeautifulSoup lea todo el DOM actualizado
+        page.wait_for_timeout(2000)  # Espera 2 segundos a que cargue el contenido nuevo
         
         html = page.content()
         soup = BeautifulSoup(html, "html.parser")
