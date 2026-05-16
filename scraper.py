@@ -3,6 +3,7 @@ import json
 import re
 import requests
 import urllib.parse
+import hashlib
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
@@ -86,7 +87,7 @@ def parse_post_data(post_element):
         tiempo = tiempo_match.group(1).strip().capitalize()
 
     clean_text_id = re.sub(r'\s+', '', full_text[:80])
-    post_id = str(hash(clean_text_id))
+    post_id = hashlib.md5(clean_text_id.encode('utf-8')).hexdigest()
 
     return {
         "juego": game, "url": url, "plataforma": platform,
