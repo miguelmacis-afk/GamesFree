@@ -163,8 +163,18 @@ def main():
             print(f"Aviso al expandir texto: {e}")
 
         # Scroll para asegurar carga de imágenes pesadas tras la expansión
-        page.evaluate("window.scrollTo(0, 1000)")
-        page.wait_for_timeout(3000)
+        print("Haciendo scroll para cargar más posts reales...")
+        for i in range(3):  # Hará scroll 3 veces hacia abajo
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            page.wait_for_timeout(2000)  # Espera 2 segundos a que cargue el contenido nuevo
+            
+        # Intentar volver a presionar Escape por si sale el banner de login molesto
+        page.keyboard.press("Escape") 
+        # --------------------------------------------------
+        
+        html = page.content()
+        soup = BeautifulSoup(html, "html.parser")
+        browser.close()
         
         html = page.content()
         soup = BeautifulSoup(html, "html.parser")
