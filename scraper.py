@@ -86,9 +86,9 @@ def parse_post_data(post_element):
     if game_match: 
         game = game_match.group(1).strip()
 
-    # 5. Tiempo / Vigencia de la oferta
+    # 5. Tiempo / Vigencia de la oferta (Regex adaptada para capturar plazos o fechas)
     tiempo = "Hasta agotar existencias / No especificado"
-    tiempo_match = re.search(r'(tienen hasta el \d+ de \s*\w+|hasta el \d+ de \s*\w+)', full_text, re.IGNORECASE)
+    tiempo_match = re.search(r'((?:tienen\s+)?hasta\s+el\s+\d+\s+de\s+\w+|antes\s+del\s+\d+\s+de\s+\w+|gratis\s+por\s+tiempo\s+limitado|permanente)', full_text, re.IGNORECASE)
     if tiempo_match: 
         tiempo = tiempo_match.group(1).strip().capitalize()
 
@@ -142,15 +142,14 @@ def main():
         page.goto("https://m.facebook.com/FreeSteamGamesJuegosSteamGratis", wait_until="networkidle")
         page.wait_for_timeout(3000)
         
-        # --- GESTIÓN ANTIBLOQUEO: VENTANA DE COOKIES DE META ---
+        # --- GESTIÓN ANTIBLOQUEO: VENTANA DE COOKIES EN INGLÉS ---
         print("Comprobando si aparece el aviso de cookies de Facebook...")
         botones_cookies = [
-            "text='Permitir todas las cookies'",
-            "text='Aceptar todas'",
             "text='Allow all cookies'",
-            "text='De acuerdo'",
-            "button:has-text('Permitir')",
-            "button:has-text('Aceptar')"
+            "text='Allow essential and optional cookies'",
+            "text='Accept all'",
+            "button:has-text('Allow')",
+            "button:has-text('Accept')"
         ]
         
         for selector_cookie in botones_cookies:
@@ -164,30 +163,42 @@ def main():
                 except:
                     pass
 
-        # Mitigar posibles diálogos flotantes adicionales o banners menores
         try:
             page.keyboard.press("Escape")
         except:
             pass
         
-        # --- SOLUCIÓN AL CLIC DE "VER MÁS" ---
-        print("Buscando textos truncados para expandir...")
-        # Iteración dinámica para resolver el desajuste de índices en cascada
-        for selector in ["text='See more'", "text='Ver más'", "text='See more...'", "text='Ver más...'"]:
+        # Pre-scroll para asegurar que los elementos del feed inicial carguen sus botones visibles
+        print("Realizando scroll preventivo de carga...")
+        for _ in range(3):
+            page.mouse.wheel(0, 800)
+            page.wait_for_timeout(1000)
+        
+        # --- SOLUCIÓN AL CLIC DE "SEE MORE" (ESTRICTO EN INGLÉS) ---
+        print("Buscando y expandiendo textos truncados (See more)...")
+        selectores_ver_mas = [
+            "text='See more'", 
+            "text='See more...'",
+            "a:has-text('See more')"
+        ]
+        
+        for selector in selectores_ver_mas:
             while True:
-                boton = page.locator(selector).first
+                # El filtro asegura que NO se haga clic por error en el banner inferior que dice "See more of this page..."
+                boton = page.locator(selector).filter(has_not_text="See more of").first
                 if boton.is_visible():
                     try:
+                        boton.scroll_into_view_if_needed(timeout=2000)
                         boton.click(timeout=2000)
-                        page.wait_for_timeout(500)  # Breve lapso para la mutación del árbol DOM
+                        page.wait_for_timeout(800)  # Espera crucial para que Facebook inyecte el texto en el DOM
                     except:
                         break
                 else:
                     break
 
-        # Scroll progresivo controlado para renderizar el feed completo
+        # Scroll progresivo controlado para renderizar el resto del feed e imágenes diferidas
         print("Forzando scroll para cargar imágenes diferidas...")
-        for _ in range(6):
+        for _ in range(5):
             page.mouse.wheel(0, 800)
             page.wait_for_timeout(1500)
             try:
@@ -222,6 +233,7 @@ def main():
         processed_count += 1
         print(f"\n--- Analizando Post #{processed_count} ---")
         print(f"Juego: {data['juego']}")
+        print(f"Tiempo: {data['tiempo']}")
         print(f"URL: {data['url']}")
 
         post_id = data['id']
