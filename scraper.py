@@ -64,7 +64,6 @@ def parse_post_data(post_element):
     image_url = None
     img_tags = post_element.find_all('img')
     for img in img_tags:
-        # Priorizar atributos de carga diferida que usa Facebook
         src = img.get('data-src') or img.get('src') or ''
         if "http" in src and not any(x in src for x in ["emoji.php", "rsrc.php", "static.xx"]):
             image_url = src
@@ -86,13 +85,12 @@ def parse_post_data(post_element):
     if game_match: 
         game = game_match.group(1).strip()
 
-    # 5. Tiempo / Vigencia de la oferta (Regex adaptada para capturar plazos o fechas)
+    # 5. Tiempo / Vigencia de la oferta
     tiempo = "Hasta agotar existencias / No especificado"
     tiempo_match = re.search(r'((?:tienen\s+)?hasta\s+el\s+\d+\s+de\s+\w+|antes\s+del\s+\d+\s+de\s+\w+|gratis\s+por\s+tiempo\s+limitado|permanente)', full_text, re.IGNORECASE)
     if tiempo_match: 
         tiempo = tiempo_match.group(1).strip().capitalize()
 
-    # Generar un hash ID único basado en el contenido del texto para evitar duplicados
     clean_text_id = re.sub(r'\s+', '', full_text[:80])
     post_id = hashlib.md5(clean_text_id.encode('utf-8')).hexdigest()
 
@@ -142,7 +140,7 @@ def main():
         page.goto("https://m.facebook.com/FreeSteamGamesJuegosSteamGratis", wait_until="networkidle")
         page.wait_for_timeout(3000)
         
-        # --- GESTIÓN ANTIBLOQUEO: VENTANA DE COOKIES EN INGLÉS ---
+        # --- GESTIÓN ANTIBLOQUEO: COOKIES EN INGLÉS ---
         print("Comprobando si aparece el aviso de cookies de Facebook...")
         botones_cookies = [
             "text='Allow all cookies'",
@@ -158,7 +156,7 @@ def main():
                 try:
                     print(f"🍪 Ventana de cookies detectada. Haciendo clic en: {selector_cookie}")
                     boton.click(timeout=3000)
-                    page.wait_for_timeout(2000)  # Pausa para que el modal se cierre visualmente
+                    page.wait_for_timeout(2000)
                     break
                 except:
                     pass
@@ -168,92 +166,82 @@ def main():
         except:
             pass
         
-        # Pre-scroll para asegurar que los elementos del feed inicial carguen sus botones visibles
-        print("Realizando scroll preventivo de carga...")
-        for _ in range(3):
-            page.mouse.wheel(0, 800)
-            page.wait_for_timeout(1000)
-        
-        # --- SOLUCIÓN AL CLIC DE "SEE MORE" (ESTRICTO EN INGLÉS) ---
-        print("Buscando y expandiendo textos truncados (See more)...")
-        selectores_ver_mas = [
-            "text='See more'", 
-            "text='See more...'",
-            "a:has-text('See more')"
-        ]
-        
-        for selector in selectores_ver_mas:
-            while True:
-                # El filtro asegura que NO se haga clic por error en el banner inferior que dice "See more of this page..."
-                boton = page.locator(selector).filter(has_not_text="See more of").first
-                if boton.is_visible():
-                    try:
-                        boton.scroll_into_view_if_needed(timeout=2000)
-                        boton.click(timeout=2000)
-                        page.wait_for_timeout(800)  # Espera crucial para que Facebook inyecte el texto en el DOM
-                    except:
-                        break
-                else:
-                    break
-
-        # Scroll progresivo controlado para renderizar el resto del feed e imágenes diferidas
-        print("Forzando scroll para cargar imágenes diferidas...")
+        # Generar un buen scroll inicial para cargar bastantes publicaciones en el DOM
+        print("Realizando scroll preventivo para cargar el feed...")
         for _ in range(5):
-            page.mouse.wheel(0, 800)
-            page.wait_for_timeout(1500)
-            try:
-                page.keyboard.press("Escape")
-            except:
-                pass
-        
-        page.wait_for_timeout(2000)
-        html = page.content()
-        soup = BeautifulSoup(html, "html.parser")
-        browser.close()
+            page.mouse.wheel(0, 900)
+            page.wait_for_timeout(1200)
 
-    # Extracción por árbol semántico robusto ante alteraciones estéticas de Meta
-    posts = soup.find_all('div', attrs={'role': 'article'})
-    if len(posts) == 0:
-        posts = soup.find_all('div', attrs={'data-tracking-duration-id': True})
-        if len(posts) == 0:
-            posts = soup.find_all('article')
+        # Localizar los contenedores de los posts de forma nativa con Playwright
+        # Evaluamos los selectores móviles más estables de Meta
+        selectores_post = ['div[role="article"]', 'div[data-tracking-duration-id]', 'article']
+        locator_posts = None
+        for sel in selectores_post:
+            if page.locator(sel).count() > 0:
+                locator_posts = page.locator(sel)
+                break
 
-    print(f"📦 Total de posts estructurales encontrados: {len(posts)}")
+        if not locator_posts:
+            print("❌ No se encontraron estructuras de posts en la página.")
+            browser.close()
+            return
 
-    detected_new = False
-    processed_count = 0
+        total_posts = locator_posts.count()
+        print(f"📦 Total de posts estructurales encontrados: {total_posts}")
 
-    for p in posts:
-        data = parse_post_data(p)
-        
-        # Validar consistencia e integridad mínima de datos extraídos
-        if len(data['raw_text']) < 15 or data['url'] == "No encontrada":
-            continue
+        detected_new = False
+        processed_count = 0
+
+        # --- BUCLE DE PROCESAMIENTO UNO A UNO ---
+        for i in range(total_posts):
+            post_locator = locator_posts.nth(i)
             
-        processed_count += 1
-        print(f"\n--- Analizando Post #{processed_count} ---")
-        print(f"Juego: {data['juego']}")
-        print(f"Tiempo: {data['tiempo']}")
-        print(f"URL: {data['url']}")
+            # 1. Intentar expandir el "See more" SOLO de este post específico antes de leer su HTML
+            for sm_text in ["See more", "See more..."]:
+                see_more_btn = post_locator.locator(f"text='{sm_text}'").filter(has_not_text="See more of").first
+                if see_more_btn.is_visible():
+                    try:
+                        see_more_btn.scroll_into_view_if_needed(timeout=1000)
+                        see_more_btn.click(timeout=1000)
+                        page.wait_for_timeout(400)  # Pausa sutil para que se abra la descripción
+                    except:
+                        pass
 
-        post_id = data['id']
-        if post_id in history:
-            print("🛑 Este juego ya está registrado en el historial.")
-            continue
+            # 2. Extraer el HTML exclusivo de este post ya expandido
+            post_html = post_locator.inner_html()
+            p_soup = BeautifulSoup(post_html, "html.parser")
+            
+            # 3. Analizar los datos extraídos
+            data = parse_post_data(p_soup)
+            
+            if len(data['raw_text']) < 15 or data['url'] == "No encontrada":
+                continue
+                
+            processed_count += 1
+            print(f"\n--- Analizando Post #{processed_count} ---")
+            print(f"Juego: {data['juego']}")
+            print(f"Tiempo: {data['tiempo']}")
+            print(f"URL: {data['url']}")
 
-        print(f"🚀 ¡Enviando '{data['juego']}' a Discord!")
-        status = send_to_discord(data, webhook_url)
-        
-        if status in [200, 204]:
-            new_history.append(post_id)
-            detected_new = True
-        else:
-            print(f"❌ Error Discord: {status}")
+            post_id = data['id']
+            if post_id in history:
+                print("🛑 Este juego ya está registrado en el historial.")
+                continue
 
-        # Control del ratio de transferencias por ejecución
-        if len(new_history) - len(history) >= 4:
-            print("⚠️ Se alcanzó el límite preventivo de 4 envíos simultáneos.")
-            break
+            print(f"🚀 ¡Enviando '{data['juego']}' a Discord!")
+            status = send_to_discord(data, webhook_url)
+            
+            if status in [200, 204]:
+                new_history.append(post_id)
+                detected_new = True
+            else:
+                print(f"❌ Error Discord: {status}")
+
+            if len(new_history) - len(history) >= 4:
+                print("⚠️ Se alcanzó el límite preventivo de 4 envíos simultáneos.")
+                break
+
+        browser.close()
 
     if detected_new:
         save_history(new_history)
