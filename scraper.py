@@ -1,3 +1,126 @@
+import os
+import json
+import re
+import requests
+import urllib.parse
+import hashlib
+from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright
+
+HISTORY_FILE = "history.json"
+
+def load_history():
+    if os.path.exists(HISTORY_FILE):
+        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+            try:
+                data = json.load(f)
+                return data if isinstance(data, list) else []
+            except:
+                return []
+    return []
+
+def save_history(history):
+    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(history, f, ensure_ascii=False, indent=4)
+
+def parse_post_data(post_element):
+    # Intentar capturar por atributo nativo, si no, buscar divs con texto relevante
+    text_elem = post_element.find(attrs={"data-ad-comet-preview": "post_message"})
+    
+    if not text_elem:
+        for div in post_element.find_all('div', dir='auto'):
+            div_text = div.get_text().lower()
+            if "gratis" in div_text or "steam" in div_text or "epic" in div_text:
+                text_elem = div
+                break
+
+    full_text = text_elem.get_text(separator="\n").strip() if text_elem else post_element.get_text(separator="\n").strip()
+    
+    # 1. Extraer URL (Decodificando el redireccionador de Facebook)
+    url = "No encontrada"
+    a_tags = post_element.find_all('a', href=True)
+    for a in a_tags:
+        href = a['href']
+        if "l.facebook.com/l.php" in href:
+            parsed_href = urllib.parse.urlparse(href)
+            query_params = urllib.parse.parse_qs(parsed_href.query)
+            if 'u' in query_params:
+                potential_url = query_params['u'][0]
+                if "facebook.com" not in potential_url:
+                    url = potential_url
+                    break
+        elif "http" in href and "facebook.com" not in href:
+            url = href
+            break
+
+    if url == "No encontrada":
+        urls = re.findall(r'(https?://[^\s]+)', full_text)
+        for u in urls:
+            if "facebook.com" not in u:
+                url = u.rstrip('.').rstrip('/')
+                break
+
+    # 2. Extraer Imagen del juego (Controlando Lazy Loading de Meta)
+    image_url = None
+    img_tags = post_element.find_all('img')
+    for img in img_tags:
+        # Priorizar atributos de carga diferida que usa Facebook
+        src = img.get('data-src') or img.get('src') or ''
+        if "http" in src and not any(x in src for x in ["emoji.php", "rsrc.php", "static.xx"]):
+            image_url = src
+            break
+
+    # 3. Plataforma
+    platform = "OTRA"
+    lower_text = full_text.lower()
+    if "steam" in url.lower() or "steam" in lower_text: 
+        platform = "STEAM"
+    elif "epic" in url.lower() or "epic" in lower_text: 
+        platform = "EPIC GAMES"
+    elif "gog" in url.lower() or "gog" in lower_text: 
+        platform = "GOG"
+
+    # 4. Nombre del Juego
+    game = full_text.split('\n')[0] if full_text else "No detectado"
+    game_match = re.search(r'^(.*?)\s+gratis en', full_text, re.IGNORECASE)
+    if game_match: 
+        game = game_match.group(1).strip()
+
+    # 5. Tiempo / Vigencia de la oferta
+    tiempo = "Hasta agotar existencias / No especificado"
+    tiempo_match = re.search(r'(tienen hasta el \d+ de \s*\w+|hasta el \d+ de \s*\w+)', full_text, re.IGNORECASE)
+    if tiempo_match: 
+        tiempo = tiempo_match.group(1).strip().capitalize()
+
+    # Generar un hash ID único basado en el contenido del texto para evitar duplicados
+    clean_text_id = re.sub(r'\s+', '', full_text[:80])
+    post_id = hashlib.md5(clean_text_id.encode('utf-8')).hexdigest()
+
+    return {
+        "juego": game, "url": url, "plataforma": platform,
+        "tiempo": tiempo, "imagen": image_url, "id": post_id,
+        "raw_text": full_text.replace('\n', ' ')
+    }
+
+def send_to_discord(post, webhook_url):
+    embed = {
+        "title": "🎮 ¡Nuevo juego gratis detectado!",
+        "color": 3066993, 
+        "fields": [
+            {"name": "Juego", "value": f"**{post['juego']}**", "inline": False},
+            {"name": "Plataforma", "value": f"🔹 {post['plataforma']}", "inline": True},
+            {"name": "Tiempo", "value": f"⏰ {post['tiempo']}", "inline": True},
+            {"name": "Enlace de obtención", "value": post['url'], "inline": False}
+        ],
+        "footer": {"text": "Facebook Scraper Bot"}
+    }
+    if post['imagen']: 
+        embed["image"] = {"url": post['imagen']}
+    
+    payload = {"embeds": [embed]}
+    res = requests.post(webhook_url, json=payload)
+    return res.status_code
+
 def main():
     webhook_url = os.environ.get("DISCORD_WEBHOOK")
     if not webhook_url:
@@ -36,54 +159,37 @@ def main():
                 try:
                     print(f"🍪 Ventana de cookies detectada. Haciendo clic en: {selector_cookie}")
                     boton.click(timeout=3000)
-                    page.wait_for_timeout(2000)
+                    page.wait_for_timeout(2000)  # Pausa para que el modal se cierre visualmente
                     break
                 except:
                     pass
 
+        # Mitigar posibles diálogos flotantes adicionales o banners menores
         try:
             page.keyboard.press("Escape")
         except:
             pass
-
-        # Scroll inicial para cargar el feed inicial antes de expandir
-        print("Realizando scroll inicial para cargar publicaciones...")
-        for _ in range(4):
-            page.mouse.wheel(0, 800)
-            page.wait_for_timeout(1000)
         
-        # --- SOLUCIÓN MEJORADA AL CLIC DE "VER MÁS" ---
-        print("Buscando y expandiendo textos truncados (Ver más)...")
-        # Combinamos textos en español/inglés junto con selectores estructurales típicos de m.facebook
-        selectores_ver_mas = [
-            "text='Ver más'", 
-            "text='See more'", 
-            "text='Ver más...'", 
-            "text='See more...'",
-            "a:has-text('Ver más')",
-            "a:has-text('See more')"
-        ]
-        
-        for selector in selectores_ver_mas:
+        # --- SOLUCIÓN AL CLIC DE "VER MÁS" ---
+        print("Buscando textos truncados para expandir...")
+        # Iteración dinámica para resolver el desajuste de índices en cascada
+        for selector in ["text='See more'", "text='Ver más'", "text='See more...'", "text='Ver más...'"]:
             while True:
-                boton = page.locator(selector).filter(has_not_text="Ver más de").first
+                boton = page.locator(selector).first
                 if boton.is_visible():
                     try:
-                        # Hacemos scroll hasta el botón para que sea clickeable de forma segura
-                        boton.scroll_into_view_if_needed(timeout=2000)
                         boton.click(timeout=2000)
-                        # Espera crucial para que Facebook inyecte el texto dinámico en el DOM
-                        page.wait_for_timeout(800)  
+                        page.wait_for_timeout(500)  # Breve lapso para la mutación del árbol DOM
                     except:
                         break
                 else:
                     break
 
-        # Scroll final definitivo para asegurar la carga de todas las imágenes mutadas
-        print("Forzando scroll final para estabilizar imágenes...")
-        for _ in range(4):
+        # Scroll progresivo controlado para renderizar el feed completo
+        print("Forzando scroll para cargar imágenes diferidas...")
+        for _ in range(6):
             page.mouse.wheel(0, 800)
-            page.wait_for_timeout(1000)
+            page.wait_for_timeout(1500)
             try:
                 page.keyboard.press("Escape")
             except:
@@ -94,7 +200,7 @@ def main():
         soup = BeautifulSoup(html, "html.parser")
         browser.close()
 
-    # --- El resto de la lógica de extracción de posts e historial se mantiene igual ---
+    # Extracción por árbol semántico robusto ante alteraciones estéticas de Meta
     posts = soup.find_all('div', attrs={'role': 'article'})
     if len(posts) == 0:
         posts = soup.find_all('div', attrs={'data-tracking-duration-id': True})
@@ -109,13 +215,13 @@ def main():
     for p in posts:
         data = parse_post_data(p)
         
+        # Validar consistencia e integridad mínima de datos extraídos
         if len(data['raw_text']) < 15 or data['url'] == "No encontrada":
             continue
             
         processed_count += 1
         print(f"\n--- Analizando Post #{processed_count} ---")
         print(f"Juego: {data['juego']}")
-        print(f"Tiempo: {data['tiempo']}")  # Añadido print para verificar el tiempo en consola
         print(f"URL: {data['url']}")
 
         post_id = data['id']
@@ -132,6 +238,7 @@ def main():
         else:
             print(f"❌ Error Discord: {status}")
 
+        # Control del ratio de transferencias por ejecución
         if len(new_history) - len(history) >= 4:
             print("⚠️ Se alcanzó el límite preventivo de 4 envíos simultáneos.")
             break
@@ -141,3 +248,6 @@ def main():
         print("\n✅ Historial actualizado con éxito en history.json.")
     else:
         print("\nNo se encontraron nuevas ofertas elegibles en esta ejecución.")
+
+if __name__ == "__main__":
+    main()
