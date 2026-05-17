@@ -85,12 +85,13 @@ def parse_post_data(post_element):
     if game_match: 
         game = game_match.group(1).strip()
 
-    # 5. Tiempo / Vigencia de la oferta
+    # 5. Tiempo / Vigencia de la oferta (Regex adaptada y flexible)
     tiempo = "Hasta agotar existencias / No especificado"
     tiempo_match = re.search(r'((?:tienen\s+)?hasta\s+el\s+\d+\s+de\s+\w+|antes\s+del\s+\d+\s+de\s+\w+|gratis\s+por\s+tiempo\s+limitado|permanente)', full_text, re.IGNORECASE)
     if tiempo_match: 
         tiempo = tiempo_match.group(1).strip().capitalize()
 
+    # Generar un hash ID único basado en el contenido del texto para evitar duplicados
     clean_text_id = re.sub(r'\s+', '', full_text[:80])
     post_id = hashlib.md5(clean_text_id.encode('utf-8')).hexdigest()
 
@@ -140,7 +141,7 @@ def main():
         page.goto("https://m.facebook.com/FreeSteamGamesJuegosSteamGratis", wait_until="networkidle")
         page.wait_for_timeout(3000)
         
-        # --- GESTIÓN ANTIBLOQUEO: COOKIES EN INGLÉS ---
+        # --- GESTIÓN ANTIBLOQUEO: VENTANA DE COOKIES (INGLÉS) ---
         print("Comprobando si aparece el aviso de cookies de Facebook...")
         botones_cookies = [
             "text='Allow all cookies'",
@@ -165,15 +166,14 @@ def main():
             page.keyboard.press("Escape")
         except:
             pass
-        
-        # Generar un buen scroll inicial para cargar bastantes publicaciones en el DOM
-        print("Realizando scroll preventivo para cargar el feed...")
+
+        # Scroll controlado inicial para inyectar un feed largo y estable en el DOM
+        print("Realizando scroll preventivo de carga...")
         for _ in range(5):
             page.mouse.wheel(0, 900)
             page.wait_for_timeout(1200)
 
-        # Localizar los contenedores de los posts de forma nativa con Playwright
-        # Evaluamos los selectores móviles más estables de Meta
+        # Identificar las estructuras de posts de forma nativa antes de BeautifulSoup
         selectores_post = ['div[role="article"]', 'div[data-tracking-duration-id]', 'article']
         locator_posts = None
         for sel in selectores_post:
@@ -192,28 +192,28 @@ def main():
         detected_new = False
         processed_count = 0
 
-        # --- BUCLE DE PROCESAMIENTO UNO A UNO ---
+        # --- EXPANSIÓN Y ANÁLISIS QUIRÚRGICO (POST POR POST) ---
         for i in range(total_posts):
             post_locator = locator_posts.nth(i)
             
-            # 1. Intentar expandir el "See more" SOLO de este post específico antes de leer su HTML
+            # Buscamos el "See more" interno y exclusivo de ESTE post únicamente
             for sm_text in ["See more", "See more..."]:
                 see_more_btn = post_locator.locator(f"text='{sm_text}'").filter(has_not_text="See more of").first
                 if see_more_btn.is_visible():
                     try:
                         see_more_btn.scroll_into_view_if_needed(timeout=1000)
                         see_more_btn.click(timeout=1000)
-                        page.wait_for_timeout(400)  # Pausa sutil para que se abra la descripción
+                        page.wait_for_timeout(400)  # Espera milimétrica para que procese el texto expandido
                     except:
                         pass
 
-            # 2. Extraer el HTML exclusivo de este post ya expandido
+            # Extraemos el HTML interno de este contenedor ya modificado
             post_html = post_locator.inner_html()
             p_soup = BeautifulSoup(post_html, "html.parser")
             
-            # 3. Analizar los datos extraídos
             data = parse_post_data(p_soup)
             
+            # Validar consistencia básica
             if len(data['raw_text']) < 15 or data['url'] == "No encontrada":
                 continue
                 
