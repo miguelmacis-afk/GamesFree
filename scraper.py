@@ -93,8 +93,8 @@ def parse_post_data(post_element):
         tiempo = tiempo_match.group(1).strip().capitalize()
 
     # Generar un hash ID único basado en el contenido del texto para evitar duplicados
-    clean_text_id = re.sub(r'\s+', '', full_text[:80])
-    post_id = hashlib.md5(clean_text_id.encode('utf-8')).hexdigest()
+    unique_string = f"{url}_{game}".strip().lower()
+    post_id = hashlib.md5(unique_string.encode('utf-8')).hexdigest()
 
     return {
         "juego": game, "url": url, "plataforma": platform,
