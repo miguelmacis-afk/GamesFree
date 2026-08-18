@@ -97,9 +97,16 @@ def parse_post_data(post_element):
 
     # 5. Tiempo
     tiempo = "Hasta agotar existencias / No especificado"
-    tiempo_match = re.search(r'(tienen hasta el \d+ de \s*\w+|hasta el \d+ de \s*\w+)', full_text, re.IGNORECASE)
+    patron_tiempo = (
+        r'(?:tienen\s+)?hasta\s+(?:el\s+)?'
+        r'(?:\d{1,2}\s+de\s+[a-záéíóúñ]+|\d{1,2}[/-]\d{1,2}|mañana|hoy)'
+        r'(?:\s+a\s+las\s+\d{1,2}(?::\d{2})?)?'
+        r'|gratis\s+(?:por|durante)\s+\d+\s+(?:días|horas)'
+    )
+    
+    tiempo_match = re.search(patron_tiempo, full_text, re.IGNORECASE)
     if tiempo_match: 
-        tiempo = tiempo_match.group(1).strip().capitalize()
+        tiempo = tiempo_match.group(0).strip().capitalize()
         
     # 6. Extraer Permalink (Texto, Historias y Fotos)
     permalink = None
