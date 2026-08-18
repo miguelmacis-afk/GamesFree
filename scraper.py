@@ -24,7 +24,6 @@ def save_history(history):
         json.dump(history, f, ensure_ascii=False, indent=4)
 
 def parse_post_data(post_element):
-    # Intentar capturar por atributo nativo, si no, buscar divs con texto relevante
     text_elem = post_element.find(attrs={"data-ad-comet-preview": "post_message"})
     
     if not text_elem:
@@ -36,7 +35,7 @@ def parse_post_data(post_element):
 
     full_text = text_elem.get_text(separator="\n").strip() if text_elem else post_element.get_text(separator="\n").strip()
     
-    # 1. Extraer URL (Decodificando el redireccionador de Facebook)
+    # 1. Extraer URL del post principal (si la hay)
     url = "No encontrada"
     a_tags = post_element.find_all('a', href=True)
     for a in a_tags:
@@ -47,7 +46,7 @@ def parse_post_data(post_element):
             if 'u' in query_params:
                 potential_url = query_params['u'][0]
                 if "facebook.com" not in potential_url:
-                    url = potential_url
+                    url = urllib.parse.unquote(potential_url)
                     break
         elif "http" in href and "facebook.com" not in href:
             url = href
@@ -60,33 +59,22 @@ def parse_post_data(post_element):
                 url = u.rstrip('.').rstrip('/')
                 break
 
-    # 2. Extraer Imagen del juego (Controlando Lazy Loading y Proxies de Meta)
+    # 2. Extraer Imagen del juego (Controlando Proxies de Meta)
     image_url = None
     img_tags = post_element.find_all('img')
-    
     for img in img_tags:
-        # Priorizar atributos de carga diferida que usa Facebook
         src = img.get('data-src') or img.get('src') or ''
-        
-        # Ignorar imágenes vacías, emojis y recursos estáticos de la interfaz
         if not src or any(x in src for x in ["emoji.php", "rsrc.php", "static.xx"]):
             continue
             
-        # CASO A: Facebook está usando su proxy para mostrar la miniatura de un enlace externo
         if "safe_image.php" in src:
             parsed_src = urllib.parse.urlparse(src)
             query_params = urllib.parse.parse_qs(parsed_src.query)
-            # La imagen real (de Steam/Epic) está en el parámetro 'url'
             if 'url' in query_params:
-                src = query_params['url'][0]
-                # Decodificamos por si viene codificada (ej. %3A a :)
-                src = urllib.parse.unquote(src)
-                
-        # CASO B: Es una ruta relativa subida a Facebook
+                src = urllib.parse.unquote(query_params['url'][0])
         elif src.startswith('/'):
             src = f"https://m.facebook.com{src}"
 
-        # Validamos que finalmente sea una URL limpia y funcional
         if src.startswith("http"):
             image_url = src
             break
@@ -107,20 +95,32 @@ def parse_post_data(post_element):
     if game_match: 
         game = game_match.group(1).strip()
 
-    # 5. Tiempo / Vigencia de la oferta
+    # 5. Tiempo
     tiempo = "Hasta agotar existencias / No especificado"
     tiempo_match = re.search(r'(tienen hasta el \d+ de \s*\w+|hasta el \d+ de \s*\w+)', full_text, re.IGNORECASE)
     if tiempo_match: 
         tiempo = tiempo_match.group(1).strip().capitalize()
+        
+    # 6. Extraer el Permalink del post (NUEVO)
+    permalink = None
+    for a in a_tags:
+        href = a['href']
+        if any(x in href for x in ['/posts/', 'story.php', 'story_fbid=']):
+            if not any(x in href for x in ['l.facebook.com', 'profile.php', 'hashtag']):
+                if href.startswith('/'):
+                    permalink = f"https://m.facebook.com{href}"
+                elif href.startswith('http'):
+                    permalink = href
+                break
 
-    # Generar un hash ID único basado en el contenido del texto para evitar duplicados
     unique_string = f"{url}_{game}".strip().lower()
     post_id = hashlib.md5(unique_string.encode('utf-8')).hexdigest()
 
     return {
         "juego": game, "url": url, "plataforma": platform,
         "tiempo": tiempo, "imagen": image_url, "id": post_id,
-        "raw_text": full_text.replace('\n', ' ')
+        "raw_text": full_text.replace('\n', ' '),
+        "permalink": permalink
     }
 
 def send_to_discord(post, webhook_url):
@@ -163,106 +163,130 @@ def main():
         page.goto("https://m.facebook.com/FreeSteamGamesJuegosSteamGratis", wait_until="networkidle")
         page.wait_for_timeout(3000)
         
-        # --- GESTIÓN ANTIBLOQUEO: VENTANA DE COOKIES DE META ---
-        print("Comprobando si aparece el aviso de cookies de Facebook...")
+        # Gestión de cookies...
         botones_cookies = [
-            "text='Permitir todas las cookies'",
-            "text='Aceptar todas'",
-            "text='Allow all cookies'",
-            "text='De acuerdo'",
-            "button:has-text('Permitir')",
-            "button:has-text('Aceptar')"
+            "text='Permitir todas las cookies'", "text='Aceptar todas'",
+            "text='Allow all cookies'", "text='De acuerdo'",
+            "button:has-text('Permitir')", "button:has-text('Aceptar')"
         ]
-        
         for selector_cookie in botones_cookies:
             boton = page.locator(selector_cookie).first
             if boton.is_visible():
                 try:
-                    print(f"🍪 Ventana de cookies detectada. Haciendo clic en: {selector_cookie}")
                     boton.click(timeout=3000)
-                    page.wait_for_timeout(2000)  # Pausa para que el modal se cierre visualmente
+                    page.wait_for_timeout(2000) 
                     break
                 except:
                     pass
 
-        # Mitigar posibles diálogos flotantes adicionales o banners menores
         try:
             page.keyboard.press("Escape")
-        except:
-            pass
+        except: pass
         
-        # --- SOLUCIÓN AL CLIC DE "VER MÁS" ---
-        print("Buscando textos truncados para expandir...")
-        # Iteración dinámica para resolver el desajuste de índices en cascada
-        for selector in ["text='See more'", "text='Ver más'", "text='See more...'", "text='Ver más...'"]:
-            while True:
-                boton = page.locator(selector).first
-                if boton.is_visible():
-                    try:
-                        boton.click(timeout=2000)
-                        page.wait_for_timeout(500)  # Breve lapso para la mutación del árbol DOM
-                    except:
-                        break
-                else:
-                    break
-
-        # Scroll progresivo controlado para renderizar el feed completo
         print("Forzando scroll para cargar imágenes diferidas...")
         for _ in range(6):
             page.mouse.wheel(0, 800)
             page.wait_for_timeout(1500)
-            try:
-                page.keyboard.press("Escape")
-            except:
-                pass
+            try: page.keyboard.press("Escape")
+            except: pass
         
         page.wait_for_timeout(2000)
+        
         html = page.content()
         soup = BeautifulSoup(html, "html.parser")
-        browser.close()
-
-    # Extracción por árbol semántico robusto ante alteraciones estéticas de Meta
-    posts = soup.find_all('div', attrs={'role': 'article'})
-    if len(posts) == 0:
-        posts = soup.find_all('div', attrs={'data-tracking-duration-id': True})
+        
+        # ⚠️ IMPORTANTE: No cerramos el browser aún para poder leer los comentarios
+        
+        posts = soup.find_all('div', attrs={'role': 'article'})
         if len(posts) == 0:
-            posts = soup.find_all('article')
+            posts = soup.find_all('div', attrs={'data-tracking-duration-id': True})
+            if len(posts) == 0:
+                posts = soup.find_all('article')
 
-    print(f"📦 Total de posts estructurales encontrados: {len(posts)}")
+        print(f"📦 Total de posts estructurales encontrados: {len(posts)}")
 
-    detected_new = False
-    processed_count = 0
+        detected_new = False
+        processed_count = 0
 
-    for p in posts:
-        data = parse_post_data(p)
-        
-        # Validar consistencia e integridad mínima de datos extraídos
-        if len(data['raw_text']) < 15 or data['url'] == "No encontrada":
-            continue
+        for p_element in posts:
+            data = parse_post_data(p_element)
             
-        processed_count += 1
-        print(f"\n--- Analizando Post #{processed_count} ---")
-        print(f"Juego: {data['juego']}")
-        print(f"URL: {data['url']}")
+            if len(data['raw_text']) < 15:
+                continue
+                
+            processed_count += 1
+            
+            # --- NUEVA LÓGICA: BUSCAR EN LOS COMENTARIOS ---
+            if data['url'] == "No encontrada" and data.get('permalink'):
+                print(f"🔍 Link no encontrado en el post. Revisando comentarios de: {data['juego']}...")
+                try:
+                    # Abrimos el post en una pestaña nueva
+                    comment_page = context.new_page()
+                    comment_page.goto(data['permalink'], wait_until="networkidle")
+                    comment_page.wait_for_timeout(3000) # Tiempo para que carguen los comentarios
+                    
+                    comment_soup = BeautifulSoup(comment_page.content(), "html.parser")
+                    
+                    # Buscar enlaces de Steam/Epic en los comentarios
+                    for a in comment_soup.find_all('a', href=True):
+                        href = a['href']
+                        if "l.facebook.com/l.php" in href:
+                            parsed_href = urllib.parse.urlparse(href)
+                            query_params = urllib.parse.parse_qs(parsed_href.query)
+                            if 'u' in query_params:
+                                potential = query_params['u'][0]
+                                if "facebook.com" not in potential:
+                                    data['url'] = urllib.parse.unquote(potential)
+                                    break
+                        elif "http" in href and "facebook.com" not in href:
+                            data['url'] = href
+                            break
+                    
+                    # Cerramos la pestaña auxiliar
+                    comment_page.close()
+                    
+                    # Recalcular la plataforma y el ID único porque ahora SÍ tenemos la URL
+                    if "steam" in data['url'].lower(): data['plataforma'] = "STEAM"
+                    elif "epic" in data['url'].lower(): data['plataforma'] = "EPIC GAMES"
+                    elif "gog" in data['url'].lower(): data['plataforma'] = "GOG"
+                    
+                    unique_string = f"{data['url']}_{data['juego']}".strip().lower()
+                    data['id'] = hashlib.md5(unique_string.encode('utf-8')).hexdigest()
+                    
+                except Exception as e:
+                    print(f"❌ Error al intentar abrir los comentarios: {e}")
+                    try: comment_page.close() 
+                    except: pass
+            # -----------------------------------------------
 
-        post_id = data['id']
-        if post_id in history:
-            print("🛑 Este juego ya está registrado en el historial.")
-            continue
+            if data['url'] == "No encontrada":
+                print(f"⚠️ No se encontró link para {data['juego']} (ni en post ni en comentarios). Omitiendo...")
+                continue
+                
+            print(f"\n--- Analizando Post #{processed_count} ---")
+            print(f"Juego: {data['juego']}")
+            print(f"URL: {data['url']}")
 
-        print(f"🚀 ¡Enviando '{data['juego']}' a Discord!")
-        status = send_to_discord(data, webhook_url)
-        
-        if status in [200, 204]:
-            new_history.append(post_id)
-            detected_new = True
-        else:
-            print(f"❌ Error Discord: {status}")
+            post_id = data['id']
+            if post_id in history:
+                print("🛑 Este juego ya está registrado en el historial.")
+                continue
 
-        # Control del ratio de transferencias por ejecución
-        if len(new_history) - len(history) >= 4:
-            print("⚠️ Se alcanzó el límite preventivo de 4 envíos simultáneos.")
-            break
+            print(f"🚀 ¡Enviando '{data['juego']}' a Discord!")
+            status = send_to_discord(data, webhook_url)
+            
+            if status in [200, 204]:
+                new_history.append(post_id)
+                detected_new = True
+            else:
+                print(f"❌ Error Discord: {status}")
+
+            if len(new_history) - len(history) >= 4:
+                print("⚠️ Se alcanzó el límite preventivo de 4 envíos simultáneos.")
+                break
+
+        # AHORA SÍ cerramos el navegador, ya que procesamos todo
+        browser.close()
 
     if detected_new:
         save_history(new_history)
