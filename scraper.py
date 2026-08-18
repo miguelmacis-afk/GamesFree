@@ -132,8 +132,7 @@ def send_to_discord(post, webhook_url):
             {"name": "Plataforma", "value": f"🔹 {post['plataforma']}", "inline": True},
             {"name": "Tiempo", "value": f"⏰ {post['tiempo']}", "inline": True},
             {"name": "Enlace de obtención", "value": post['url'], "inline": False}
-        ],
-        "footer": {"text": "Facebook Scraper Bot"}
+        ]
     }
     if post['imagen']: 
         embed["image"] = {"url": post['imagen']}
