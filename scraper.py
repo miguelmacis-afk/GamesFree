@@ -60,13 +60,34 @@ def parse_post_data(post_element):
                 url = u.rstrip('.').rstrip('/')
                 break
 
-    # 2. Extraer Imagen del juego (Controlando Lazy Loading de Meta)
+    # 2. Extraer Imagen del juego (Controlando Lazy Loading y Proxies de Meta)
     image_url = None
     img_tags = post_element.find_all('img')
+    
     for img in img_tags:
         # Priorizar atributos de carga diferida que usa Facebook
         src = img.get('data-src') or img.get('src') or ''
-        if "http" in src and not any(x in src for x in ["emoji.php", "rsrc.php", "static.xx"]):
+        
+        # Ignorar imágenes vacías, emojis y recursos estáticos de la interfaz
+        if not src or any(x in src for x in ["emoji.php", "rsrc.php", "static.xx"]):
+            continue
+            
+        # CASO A: Facebook está usando su proxy para mostrar la miniatura de un enlace externo
+        if "safe_image.php" in src:
+            parsed_src = urllib.parse.urlparse(src)
+            query_params = urllib.parse.parse_qs(parsed_src.query)
+            # La imagen real (de Steam/Epic) está en el parámetro 'url'
+            if 'url' in query_params:
+                src = query_params['url'][0]
+                # Decodificamos por si viene codificada (ej. %3A a :)
+                src = urllib.parse.unquote(src)
+                
+        # CASO B: Es una ruta relativa subida a Facebook
+        elif src.startswith('/'):
+            src = f"https://m.facebook.com{src}"
+
+        # Validamos que finalmente sea una URL limpia y funcional
+        if src.startswith("http"):
             image_url = src
             break
 
