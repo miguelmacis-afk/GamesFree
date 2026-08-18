@@ -2,7 +2,7 @@ name: Facebook Game Scraper
 
 on:
   schedule:
-    # Se ejecuta cada hora (puedes cambiarlo según prefieras)
+    # Se ejecuta cada hora
     - cron: '0 * * * *'
   workflow_dispatch: # Permite ejecutar el script manualmente desde GitHub
 
@@ -10,35 +10,49 @@ jobs:
   scrape-and-notify:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # Requerido para poder actualizar el history.json en tu repo
+      contents: write # Requerido para actualizar history.json
 
     steps:
-    - name: Clonar repositorio
-      uses: actions/checkout@v4
+      - name: Clonar repositorio
+        uses: actions/checkout@v4
 
-    - name: Configurar Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip' # ⚡ Caché para paquetes de pip
 
-    - name: Instalar dependencias del sistema y Python
-      run: |
-        pip install playwright beautifulsoup4 requests
-        playwright install chromium --with-deps
+      - name: Instalar librerías de Python
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright beautifulsoup4 requests
 
-    - name: Ejecutar Scraper
-      env:
-        DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-      run: python scraper.py
+      - name: Obtener versión de Playwright
+        id: playwright-version
+        run: echo "version=$(pip show playwright | grep Version | cut -d' ' -f2)" >> $GITHUB_OUTPUT
 
-    - name: Guardar historial en el repositorio
-      run: |
-        git config --global user.name "GitHub Actions Bot"
-        git config --global user.email "actions@github.com"
-        git add history.json
-        if ! git diff --cached --quiet; then
-          git commit -m "🤖 Actualizar historial de publicaciones [Skip CI]"
-          git push
-        else
-          echo "Sin cambios en el historial."
-        fi
+      - name: Caché del navegador Chromium
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ steps.playwright-version.outputs.version }}
+
+      - name: Instalar dependencias de Chromium
+        run: playwright install chromium --with-deps
+
+      - name: Ejecutar Scraper
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: python scraper.py
+
+      - name: Guardar historial en el repositorio
+        run: |
+          git config --global user.name "GitHub Actions Bot"
+          git config --global user.email "actions@github.com"
+          git add history.json
+          if ! git diff --cached --quiet; then
+            git commit -m "🤖 Actualizar historial de publicaciones [Skip CI]"
+            git push
+          else
+            echo "Sin cambios en el historial."
+          fi
