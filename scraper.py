@@ -160,7 +160,7 @@ def main():
         page = context.new_page()
         
         print("Abriendo Facebook...")
-        page.goto("https://m.facebook.com/FreeSteamGamesJuegosSteamGratis", wait_until="networkidle")
+        page.goto("https://m.facebook.com/FreeSteamGamesJuegosSteamGratis", wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(3000)
         
         # Gestión de cookies...
@@ -222,7 +222,7 @@ def main():
                 try:
                     # Abrimos el post en una pestaña nueva
                     comment_page = context.new_page()
-                    comment_page.goto(data['permalink'], wait_until="networkidle")
+                    comment_page.goto(data['permalink'], wait_until="domcontentloaded", timeout=60000)
                     comment_page.wait_for_timeout(3000) # Tiempo para que carguen los comentarios
                     
                     comment_soup = BeautifulSoup(comment_page.content(), "html.parser")
