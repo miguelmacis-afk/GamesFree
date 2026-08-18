@@ -15,7 +15,7 @@ def load_history():
             try:
                 data = json.load(f)
                 return data if isinstance(data, list) else []
-            except:
+            except Exception:
                 return []
     return []
 
@@ -101,11 +101,11 @@ def parse_post_data(post_element):
     if tiempo_match: 
         tiempo = tiempo_match.group(1).strip().capitalize()
         
-    # 6. Extraer el Permalink del post (NUEVO)
+    # 6. Extraer Permalink (Texto, Historias y Fotos)
     permalink = None
     for a in a_tags:
         href = a['href']
-        if any(x in href for x in ['/posts/', 'story.php', 'story_fbid=']):
+        if any(x in href for x in ['/posts/', 'story.php', 'story_fbid=', '/photo', 'fbid=']):
             if not any(x in href for x in ['l.facebook.com', 'profile.php', 'hashtag']):
                 if href.startswith('/'):
                     permalink = f"https://m.facebook.com{href}"
@@ -163,7 +163,7 @@ def main():
         page.goto("https://m.facebook.com/FreeSteamGamesJuegosSteamGratis", wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(3000)
         
-        # Gestión de cookies...
+        # Gestión de cookies
         botones_cookies = [
             "text='Permitir todas las cookies'", "text='Aceptar todas'",
             "text='Allow all cookies'", "text='De acuerdo'",
@@ -176,26 +176,27 @@ def main():
                     boton.click(timeout=3000)
                     page.wait_for_timeout(2000) 
                     break
-                except:
+                except Exception:
                     pass
 
         try:
             page.keyboard.press("Escape")
-        except: pass
+        except Exception:
+            pass
         
         print("Forzando scroll para cargar imágenes diferidas...")
         for _ in range(6):
             page.mouse.wheel(0, 800)
             page.wait_for_timeout(1500)
-            try: page.keyboard.press("Escape")
-            except: pass
+            try:
+                page.keyboard.press("Escape")
+            except Exception:
+                pass
         
         page.wait_for_timeout(2000)
         
         html = page.content()
         soup = BeautifulSoup(html, "html.parser")
-        
-        # ⚠️ IMPORTANTE: No cerramos el browser aún para poder leer los comentarios
         
         posts = soup.find_all('div', attrs={'role': 'article'})
         if len(posts) == 0:
@@ -216,18 +217,21 @@ def main():
                 
             processed_count += 1
             
-            # --- NUEVA LÓGICA: BUSCAR EN LOS COMENTARIOS ---
+            # --- BÚSQUEDA ROBUSTA EN COMENTARIOS ---
             if data['url'] == "No encontrada" and data.get('permalink'):
                 print(f"🔍 Link no encontrado en el post. Revisando comentarios de: {data['juego']}...")
                 try:
-                    # Abrimos el post en una pestaña nueva
                     comment_page = context.new_page()
                     comment_page.goto(data['permalink'], wait_until="domcontentloaded", timeout=60000)
-                    comment_page.wait_for_timeout(3000) # Tiempo para que carguen los comentarios
+                    comment_page.wait_for_timeout(2000)
+                    
+                    comment_page.mouse.wheel(0, 500)
+                    comment_page.wait_for_timeout(1500)
                     
                     comment_soup = BeautifulSoup(comment_page.content(), "html.parser")
-                    
-                    # Buscar enlaces de Steam/Epic en los comentarios
+                    found_url = None
+
+                    # A. Búsqueda por etiquetas <a>
                     for a in comment_soup.find_all('a', href=True):
                         href = a['href']
                         if "l.facebook.com/l.php" in href:
@@ -236,28 +240,41 @@ def main():
                             if 'u' in query_params:
                                 potential = query_params['u'][0]
                                 if "facebook.com" not in potential:
-                                    data['url'] = urllib.parse.unquote(potential)
+                                    found_url = urllib.parse.unquote(potential)
                                     break
                         elif "http" in href and "facebook.com" not in href:
-                            data['url'] = href
+                            found_url = href
                             break
-                    
-                    # Cerramos la pestaña auxiliar
+
+                    # B. Búsqueda por texto plano si no estaba en <a>
+                    if not found_url:
+                        full_comment_text = comment_soup.get_text(separator=" ")
+                        extracted_urls = re.findall(r'(https?://[^\s]+)', full_comment_text)
+                        for u in extracted_urls:
+                            if "facebook.com" not in u and "fbcdn.net" not in u:
+                                found_url = u.rstrip('.').rstrip(')').rstrip('/')
+                                break
+
+                    if found_url:
+                        data['url'] = found_url
+
                     comment_page.close()
                     
-                    # Recalcular la plataforma y el ID único porque ahora SÍ tenemos la URL
-                    if "steam" in data['url'].lower(): data['plataforma'] = "STEAM"
-                    elif "epic" in data['url'].lower(): data['plataforma'] = "EPIC GAMES"
-                    elif "gog" in data['url'].lower(): data['plataforma'] = "GOG"
-                    
-                    unique_string = f"{data['url']}_{data['juego']}".strip().lower()
-                    data['id'] = hashlib.md5(unique_string.encode('utf-8')).hexdigest()
+                    # Actualizar plataforma e id único
+                    if data['url'] != "No encontrada":
+                        if "steam" in data['url'].lower(): data['plataforma'] = "STEAM"
+                        elif "epic" in data['url'].lower(): data['plataforma'] = "EPIC GAMES"
+                        elif "gog" in data['url'].lower(): data['plataforma'] = "GOG"
+                        
+                        unique_string = f"{data['url']}_{data['juego']}".strip().lower()
+                        data['id'] = hashlib.md5(unique_string.encode('utf-8')).hexdigest()
                     
                 except Exception as e:
                     print(f"❌ Error al intentar abrir los comentarios: {e}")
-                    try: comment_page.close() 
-                    except: pass
-            # -----------------------------------------------
+                    try:
+                        comment_page.close() 
+                    except Exception:
+                        pass
 
             if data['url'] == "No encontrada":
                 print(f"⚠️ No se encontró link para {data['juego']} (ni en post ni en comentarios). Omitiendo...")
@@ -285,7 +302,6 @@ def main():
                 print("⚠️ Se alcanzó el límite preventivo de 4 envíos simultáneos.")
                 break
 
-        # AHORA SÍ cerramos el navegador, ya que procesamos todo
         browser.close()
 
     if detected_new:
