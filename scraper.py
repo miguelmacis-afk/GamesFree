@@ -132,10 +132,9 @@ def parse_post_data(post_element):
 
 def send_to_discord(post, webhook_url):
     embed = {
-        "title": "🎮 ¡Nuevo juego gratis detectado!",
+        "title": f"🎮 ¡{post['juego']} gratis!",
         "color": 3066993, 
         "fields": [
-            {"name": "Juego", "value": f"**{post['juego']}**", "inline": False},
             {"name": "Plataforma", "value": f"🔹 {post['plataforma']}", "inline": True},
             {"name": "Tiempo", "value": f"⏰ {post['tiempo']}", "inline": True},
             {"name": "Enlace de obtención", "value": post['url'], "inline": False}
