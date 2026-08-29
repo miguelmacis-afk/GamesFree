@@ -110,10 +110,21 @@ def parse_post_data(post_element):
     # 5. Tiempo
     tiempo = "Hasta agotar existencias / No especificado"
     patron_tiempo = (
-        r'(?:tienen\s+)?hasta\s+(?:el\s+)?'
-        r'(?:\d{1,2}\s+de\s+[a-záéíóúñ]+|\d{1,2}[/-]\d{1,2}|mañana|hoy)'
-        r'(?:\s+a\s+las\s+\d{1,2}(?::\d{2})?)?'
-        r'|gratis\s+(?:por|durante)\s+\d+\s+(?:días|horas)'
+        # Caso: "Tienen 1 semana", "Tenéis 3 días", "Disponible durante 48 horas"
+        r'(?:tienen|tienes|tenéis|disponen\s+de|disponible[s]?|gratis)\s+'
+        r'(?:por|durante|hasta|solo|para)?\s*'
+        r'\d+\s*(?:semana[s]?|día[s]?|dia[s]?|hora[s]?)'
+        
+        # Caso: "Hasta el 15 de marzo", "Finaliza el 20/05", "Hasta mañana"
+        r'|(?:hasta|termina|finaliza)\s+(?:el\s+)?'
+        r'(?:\d{1,2}\s+de\s+[a-záéíóúñ]+(?:(?:\s+de)?\s+\d{4})?|\d{1,2}[/-]\d{1,2}|mañana|hoy)'
+        r'(?:\s+(?:a\s+las|alas)\s+\d{1,2}(?::\d{2})?\s*(?:hs|hrs|am|pm|h|horas)?)?'
+        
+        # Caso: "Por 1 semana", "Durante 7 días"
+        r'|(?:por|durante)\s+\d+\s+(?:semana[s]?|día[s]?|dia[s]?|hora[s]?)'
+        
+        # Caso: "Hasta agotar existencias / stock"
+        r'|hasta\s+agotar\s+(?:existencias|stock)'
     )
     
     tiempo_match = re.search(patron_tiempo, full_text, re.IGNORECASE)
