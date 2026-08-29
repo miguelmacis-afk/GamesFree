@@ -29,8 +29,10 @@ def load_history():
     return []
 
 def save_history(history):
+    # Conserva solo los últimos 10 elementos del historial
+    historial_reciente = history[-10:]
     with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(history, f, ensure_ascii=False, indent=4)
+        json.dump(historial_reciente, f, ensure_ascii=False, indent=4)
 
 def parse_post_data(post_element):
     text_elem = post_element.find(attrs={"data-ad-comet-preview": "post_message"})
