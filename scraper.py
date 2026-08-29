@@ -8,7 +8,16 @@ from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
 HISTORY_FILE = "history.json"
-
+def es_url_valida(url):
+    if not url or not url.startswith("http"):
+        return False
+    # Lista de dominios propios de Meta y redes a ignorar
+    dominios_ignorados = [
+        "facebook.com", "messenger.com", "fb.com", 
+        "fb.me", "fbcdn.net", "instagram.com", "whatsapp.com"
+    ]
+    url_lower = url.lower()
+    return not any(dominio in url_lower for dominio in dominios_ignorados)
 def load_history():
     if os.path.exists(HISTORY_FILE):
         with open(HISTORY_FILE, "r", encoding="utf-8") as f:
@@ -40,23 +49,26 @@ def parse_post_data(post_element):
     a_tags = post_element.find_all('a', href=True)
     for a in a_tags:
         href = a['href']
+        potential_url = None
+        
         if "l.facebook.com/l.php" in href:
             parsed_href = urllib.parse.urlparse(href)
             query_params = urllib.parse.parse_qs(parsed_href.query)
             if 'u' in query_params:
-                potential_url = query_params['u'][0]
-                if "facebook.com" not in potential_url:
-                    url = urllib.parse.unquote(potential_url)
-                    break
-        elif "http" in href and "facebook.com" not in href:
-            url = href
+                potential_url = urllib.parse.unquote(query_params['u'][0])
+        else:
+            potential_url = href
+
+        if potential_url and es_url_valida(potential_url):
+            url = potential_url
             break
 
     if url == "No encontrada":
         urls = re.findall(r'(https?://[^\s]+)', full_text)
         for u in urls:
-            if "facebook.com" not in u:
-                url = u.rstrip('.').rstrip('/')
+            u_clean = u.rstrip('.').rstrip(')').rstrip('/')
+            if es_url_valida(u_clean):
+                url = u_clean
                 break
 
     # 2. Extraer Imagen del juego (Controlando Proxies de Meta)
@@ -197,8 +209,18 @@ def main():
                 page.keyboard.press("Escape")
             except Exception:
                 pass
-        
-        page.wait_for_timeout(2000)
+        print("Expandiendo textos ocultos (Ver más)...")
+        page.evaluate("""
+            const buttons = Array.from(document.querySelectorAll('div[role="button"], a'));
+            buttons.forEach(btn => {
+                const text = btn.innerText || btn.textContent;
+                if (text && (text.includes('Ver más') || text.includes('See more'))) {
+                    try { btn.click(); } catch(e) {}
+                }
+            });
+        """)
+        page.wait_for_timeout(2000) # Esperar a que se despliegue el texto
+        # ---------------------------------------------
         
         html = page.content()
         soup = BeautifulSoup(html, "html.parser")
@@ -239,16 +261,17 @@ def main():
                     # A. Búsqueda por etiquetas <a>
                     for a in comment_soup.find_all('a', href=True):
                         href = a['href']
+                        potential = None
                         if "l.facebook.com/l.php" in href:
                             parsed_href = urllib.parse.urlparse(href)
                             query_params = urllib.parse.parse_qs(parsed_href.query)
                             if 'u' in query_params:
-                                potential = query_params['u'][0]
-                                if "facebook.com" not in potential:
-                                    found_url = urllib.parse.unquote(potential)
-                                    break
-                        elif "http" in href and "facebook.com" not in href:
-                            found_url = href
+                                potential = urllib.parse.unquote(query_params['u'][0])
+                        else:
+                            potential = href
+
+                        if potential and es_url_valida(potential):
+                            found_url = potential
                             break
 
                     # B. Búsqueda por texto plano si no estaba en <a>
@@ -256,8 +279,9 @@ def main():
                         full_comment_text = comment_soup.get_text(separator=" ")
                         extracted_urls = re.findall(r'(https?://[^\s]+)', full_comment_text)
                         for u in extracted_urls:
-                            if "facebook.com" not in u and "fbcdn.net" not in u:
-                                found_url = u.rstrip('.').rstrip(')').rstrip('/')
+                            u_clean = u.rstrip('.').rstrip(')').rstrip('/')
+                            if es_url_valida(u_clean):
+                                found_url = u_clean
                                 break
 
                     if found_url:
