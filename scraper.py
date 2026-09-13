@@ -15,7 +15,7 @@ def es_url_valida(url):
     dominios_ignorados = [
         "facebook.com", "messenger.com", "fb.com", 
         "fb.me", "fbcdn.net", "instagram.com", "whatsapp.com",
-        "meta."
+        "meta.com", "meta.ai", "meta.org"
     ]
     url_lower = url.lower()
     return not any(dominio in url_lower for dominio in dominios_ignorados)
