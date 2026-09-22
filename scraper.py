@@ -14,10 +14,13 @@ def es_url_valida(url):
         
     url_lower = url.lower()
     
-    # Lista blanca: Solo permitimos URLs que contengan estos términos
+    # 1. Excluir explícitamente enlaces de Facebook
+    if "facebook" in url_lower or "fb.com" in url_lower:
+        return False
+        
+    # 2. Permitir solo si pertenece a una tienda de la lista blanca
     tiendas_permitidas = ["steam", "epic", "gog"]
     
-    # Retorna True solo si encuentra alguno de los términos permitidos en la URL
     return any(tienda in url_lower for tienda in tiendas_permitidas)
 def load_history():
     if os.path.exists(HISTORY_FILE):
