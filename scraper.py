@@ -169,11 +169,27 @@ def send_to_discord(post, webhook_url):
             {"name": "Enlace de obtención", "value": post['url'], "inline": False}
         ]
     }
-    if post['imagen']: 
-        embed["image"] = {"url": post['imagen']}
     
-    payload = {"embeds": [embed]}
-    res = requests.post(webhook_url, json=payload)
+    files = {}
+    if post['imagen']:
+        try:
+            # 1. Descargamos la imagen antes de que el token de Facebook expire
+            img_res = requests.get(post['imagen'], timeout=10)
+            if img_res.status_code == 200:
+                # 2. Adjuntamos la imagen al mensaje de Discord usando attachment://
+                files = {"file": ("imagen.jpg", img_res.content, "image/jpeg")}
+                embed["image"] = {"url": "attachment://imagen.jpg"}
+        except Exception as e:
+            print(f"⚠️ No se pudo descargar la imagen: {e}")
+
+    # 3. Si hay un archivo adjunto, Discord requiere enviar el JSON mediante 'payload_json'
+    if files:
+        payload = {"payload_json": json.dumps({"embeds": [embed]})}
+        res = requests.post(webhook_url, data=payload, files=files)
+    else:
+        payload = {"embeds": [embed]}
+        res = requests.post(webhook_url, json=payload)
+        
     return res.status_code
 
 def main():
