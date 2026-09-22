@@ -11,14 +11,14 @@ HISTORY_FILE = "history.json"
 def es_url_valida(url):
     if not url or not url.startswith("http"):
         return False
-    # Lista de dominios propios de Meta y redes a ignorar
-    dominios_ignorados = [
-        "facebook.com", "messenger.com", "fb.com", 
-        "fb.me", "fbcdn.net", "instagram.com", "whatsapp.com",
-        "meta.com", "meta.ai", "meta.org"
-    ]
+        
     url_lower = url.lower()
-    return not any(dominio in url_lower for dominio in dominios_ignorados)
+    
+    # Lista blanca: Solo permitimos URLs que contengan estos términos
+    tiendas_permitidas = ["steam", "epic", "gog"]
+    
+    # Retorna True solo si encuentra alguno de los términos permitidos en la URL
+    return any(tienda in url_lower for tienda in tiendas_permitidas)
 def load_history():
     if os.path.exists(HISTORY_FILE):
         with open(HISTORY_FILE, "r", encoding="utf-8") as f:
